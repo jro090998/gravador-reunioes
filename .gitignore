@@ -1,0 +1,17 @@
+.env
+credentials.json
+token.json
+.claude/
+__pycache__/
+*.pyc
+transcricoes/
+downloads/
+dist/
+build/
+*.spec
+.streamlit/
+settings.json
+*.wav
+*.mp3
+*.mp4
+*.mkv

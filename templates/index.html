@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gravador de Reuniões</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Segoe UI', sans-serif;
+    background: #0e0e0e;
+    color: #f1f5f9;
+    min-height: 100vh;
+  }
+
+  /* HEADER */
+  .header {
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    box-shadow: 0 4px 20px rgba(99,102,241,0.3);
+  }
+  .header h1 { font-size: 1.2rem; font-weight: 800; }
+  .badge {
+    font-size: 0.78rem;
+    padding: 4px 14px;
+    border-radius: 99px;
+    background: rgba(255,255,255,0.15);
+    font-weight: 600;
+  }
+  .badge.ok   { background: rgba(16,185,129,0.2); color: #6ee7b7; }
+  .badge.err  { background: rgba(239,68,68,0.2);  color: #fca5a5; }
+  .badge.busy { background: rgba(99,102,241,0.2); color: #c7d2fe; }
+
+  /* LAYOUT */
+  .main { max-width: 820px; margin: 24px auto; padding: 0 16px; }
+  .main > * + * { margin-top: 16px; }
+
+  /* CARD */
+  .card {
+    background: #1a1a2e;
+    border: 1px solid #2a2a40;
+    border-radius: 14px;
+    padding: 20px 22px;
+  }
+  .card-title {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #6b7280;
+    font-weight: 700;
+    margin-bottom: 14px;
+  }
+
+  /* TABS */
+  .tabs {
+    display: flex;
+    background: #12121e;
+    border-radius: 10px;
+    padding: 4px;
+    gap: 4px;
+  }
+  .tab {
+    flex: 1;
+    padding: 10px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: #6b7280;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.2s;
+  }
+  .tab.ativo {
+    background: #1a1a2e;
+    color: #f1f5f9;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  }
+
+  /* PAINÉIS */
+  .painel { display: none; }
+  .painel.visivel { display: block; }
+
+  /* GRAVAÇÃO */
+  .rec-center {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 0;
+  }
+  .fontes { display: flex; gap: 10px; }
+  .fonte {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 14px;
+    border-radius: 99px;
+    font-size: 0.8rem;
+    color: #6b7280;
+    background: #12121e;
+    border: 1px solid #2a2a40;
+    transition: all 0.3s;
+  }
+  .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #2a2a40;
+    transition: all 0.3s;
+  }
+  .fonte.ligado { color: #f1f5f9; border-color: rgba(16,185,129,0.4); }
+  .fonte.ligado .dot { background: #10b981; box-shadow: 0 0 6px #10b981; }
+  .fonte.aviso  { color: #f59e0b; border-color: rgba(245,158,11,0.4); }
+  .fonte.aviso  .dot { background: #f59e0b; }
+
+  #btn-gravar {
+    background: linear-gradient(135deg, #ef4444, #b91c1c);
+    color: #fff;
+    border: none;
+    border-radius: 12px;
+    padding: 14px 52px;
+    font-size: 1.15rem;
+    font-weight: 800;
+    cursor: pointer;
+    font-family: inherit;
+    box-shadow: 0 4px 20px rgba(239,68,68,0.4);
+    transition: all 0.2s;
+    min-width: 220px;
+  }
+  #btn-gravar:hover:not(:disabled) { transform: translateY(-1px); }
+  #btn-gravar.parar { background: linear-gradient(135deg, #6366f1, #8b5cf6); box-shadow: 0 4px 20px rgba(99,102,241,0.4); }
+  #btn-gravar:disabled { opacity: 0.5; cursor: default; }
+
+  #timer {
+    font-family: monospace;
+    font-size: 2rem;
+    font-weight: 700;
+    color: #ef4444;
+    min-width: 80px;
+    text-align: center;
+    display: none;
+  }
+
+  .dica {
+    font-size: 0.76rem;
+    color: #6b7280;
+    text-align: center;
+    max-width: 440px;
+    line-height: 1.6;
+    background: #12121e;
+    border-radius: 8px;
+    padding: 8px 14px;
+    border: 1px solid #2a2a40;
+  }
+
+  /* UPLOAD */
+  .upload-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  @media (max-width: 560px) { .upload-grid { grid-template-columns: 1fr; } }
+
+  .zona {
+    border: 2px dashed #2a2a40;
+    border-radius: 12px;
+    padding: 22px 14px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: #12121e;
+  }
+  .zona:hover { border-color: #6366f1; background: rgba(99,102,241,0.05); }
+  .zona.com-arquivo { border-color: #10b981; }
+  .zona input[type=file] { display: none; }
+  .zona-icone { font-size: 1.8rem; margin-bottom: 6px; }
+  .zona-titulo { font-size: 0.88rem; font-weight: 700; margin-bottom: 4px; }
+  .zona-sub { font-size: 0.75rem; color: #6b7280; line-height: 1.5; }
+  .zona-arquivo { font-size: 0.76rem; color: #10b981; margin-top: 6px; word-break: break-all; }
+
+  /* BOTÕES */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 8px 16px;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.84rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s;
+  }
+  .btn:disabled { opacity: 0.5; cursor: default; }
+  .btn-primary { background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; }
+  .btn-primary:hover:not(:disabled) { transform: translateY(-1px); }
+  .btn-ghost { background: #12121e; color: #f1f5f9; border: 1px solid #2a2a40; }
+  .btn-ghost:hover:not(:disabled) { border-color: #6366f1; }
+  .btn-green { background: linear-gradient(135deg, #10b981, #059669); color: #fff; }
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+
+  /* TEXTAREA */
+  textarea {
+    width: 100%;
+    background: #12121e;
+    color: #f1f5f9;
+    border: 1px solid #2a2a40;
+    border-radius: 8px;
+    padding: 12px;
+    font-family: 'Consolas', monospace;
+    font-size: 0.84rem;
+    resize: vertical;
+    min-height: 180px;
+    line-height: 1.7;
+  }
+  textarea:focus { outline: none; border-color: #6366f1; }
+
+  /* RESUMO */
+  #box-resumo {
+    background: #12121e;
+    border-left: 3px solid #6366f1;
+    border-radius: 0 8px 8px 0;
+    padding: 14px 16px;
+    font-size: 0.86rem;
+    line-height: 1.8;
+    white-space: pre-wrap;
+    display: none;
+  }
+
+  /* SPINNER */
+  .loading {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.84rem;
+    color: #6b7280;
+    padding: 6px 0;
+  }
+  .loading.show { display: flex; }
+  .spinner {
+    width: 15px; height: 15px;
+    border: 2px solid #2a2a40;
+    border-top-color: #6366f1;
+    border-radius: 50%;
+    animation: girar 0.7s linear infinite;
+  }
+  @keyframes girar { to { transform: rotate(360deg); } }
+
+  /* MODAL EMAIL */
+  .overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    backdrop-filter: blur(3px);
+  }
+  .overlay.aberto { display: flex; }
+  .modal {
+    background: #1a1a2e;
+    border: 1px solid #2a2a40;
+    border-radius: 16px;
+    padding: 28px;
+    width: min(460px, 95vw);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    position: relative;
+  }
+  .modal h2 { font-size: 1rem; font-weight: 700; margin-bottom: 18px; }
+  .campo { margin-bottom: 12px; }
+  .campo label { display: block; font-size: 0.78rem; color: #6b7280; margin-bottom: 4px; font-weight: 600; }
+  .campo input, .campo textarea {
+    width: 100%;
+    background: #12121e;
+    color: #f1f5f9;
+    border: 1px solid #2a2a40;
+    border-radius: 7px;
+    padding: 8px 11px;
+    font-size: 0.86rem;
+    font-family: inherit;
+  }
+  .campo input:focus, .campo textarea:focus { outline: none; border-color: #6366f1; }
+  .modal-fechar {
+    position: absolute; top: 14px; right: 14px;
+    background: #12121e; border: 1px solid #2a2a40;
+    color: #6b7280; border-radius: 7px;
+    width: 28px; height: 28px; cursor: pointer; font-size: 0.9rem;
+  }
+  .modal-footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+  select {
+    background: #12121e;
+    color: #f1f5f9;
+    border: 1px solid #2a2a40;
+    border-radius: 7px;
+    padding: 7px 12px;
+    font-size: 0.86rem;
+    font-family: inherit;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <h1>🎙 Gravador de Reuniões</h1>
+  <span class="badge" id="badge">⏳ aguardando</span>
+</div>
+
+<div class="main">
+
+  <!-- CONFIG -->
+  <div class="card">
+    <div class="card-title">⚙️ Configurações</div>
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+      <span style="font-size:0.82rem; color:#6b7280;">Modelo Whisper:</span>
+      <select id="modelo">
+        <option value="tiny">⚡ tiny — mais rápido</option>
+        <option value="base" selected>🔵 base — recomendado</option>
+        <option value="small">🟡 small</option>
+        <option value="medium">🟠 medium</option>
+        <option value="large">🔴 large — mais preciso</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- ABAS -->
+  <div class="tabs">
+    <button class="tab ativo" id="tab-ao-vivo" onclick="trocarAba('ao-vivo')">🎤 Gravar ao vivo</button>
+    <button class="tab"       id="tab-arquivo" onclick="trocarAba('arquivo')">📂 Enviar arquivo</button>
+  </div>
+
+  <!-- PAINEL: GRAVAR AO VIVO -->
+  <div class="card painel visivel" id="painel-ao-vivo">
+    <div class="card-title">🔴 Gravação ao vivo</div>
+    <div class="rec-center">
+
+      <div class="fontes">
+        <div class="fonte" id="fonte-mic"><span class="dot"></span> 🎤 Microfone</div>
+        <div class="fonte" id="fonte-sys"><span class="dot"></span> 🔊 Navegador</div>
+      </div>
+
+      <button id="btn-gravar" onclick="alternarGravacao()">⏺ GRAVAR</button>
+
+      <div id="timer">00:00</div>
+
+      <div class="dica">
+        💡 Para capturar áudio do navegador: no diálogo de compartilhamento,
+        selecione a <strong>aba ou janela</strong> e marque <strong>"Compartilhar áudio"</strong>.
+      </div>
+
+    </div>
+  </div>
+
+  <!-- PAINEL: ENVIAR ARQUIVO -->
+  <div class="card painel" id="painel-arquivo">
+    <div class="card-title">📂 Enviar arquivo para transcrição</div>
+
+    <div class="upload-grid">
+
+      <div class="zona" id="zona-mic" onclick="document.getElementById('input-mic').click()"
+           ondragover="arrastarSobre(event,'zona-mic')" ondragleave="arrastarSair('zona-mic')" ondrop="soltar(event,'mic')">
+        <input type="file" id="input-mic"
+               accept=".mp4,.mkv,.avi,.mov,.wmv,.flv,.m4v,.ts,.mpeg,.mpg,.webm,.mp3,.wav,.m4a,.ogg,.opus,.flac"
+               onchange="arquivoSelecionado(this,'mic')">
+        <div class="zona-icone">🎤</div>
+        <div class="zona-titulo">Áudio / Vídeo principal</div>
+        <div class="zona-sub">Clique ou arraste o arquivo aqui<br>MP4 · MKV · AVI · MOV · MP3 · WAV · M4A...</div>
+        <div class="zona-arquivo" id="nome-mic"></div>
+      </div>
+
+      <div class="zona" id="zona-sys" onclick="document.getElementById('input-sys').click()"
+           ondragover="arrastarSobre(event,'zona-sys')" ondragleave="arrastarSair('zona-sys')" ondrop="soltar(event,'sys')">
+        <input type="file" id="input-sys"
+               accept=".mp4,.mkv,.avi,.mov,.wmv,.flv,.m4v,.ts,.mpeg,.mpg,.webm,.mp3,.wav,.m4a,.ogg,.opus,.flac"
+               onchange="arquivoSelecionado(this,'sys')">
+        <div class="zona-icone">🔊</div>
+        <div class="zona-titulo">Navegador / Sistema <span style="font-weight:400; color:#6b7280; font-size:0.8rem;">(opcional)</span></div>
+        <div class="zona-sub">Clique ou arraste o arquivo aqui<br>MP4 · MKV · AVI · MOV · MP3 · WAV · M4A...</div>
+        <div class="zona-arquivo" id="nome-sys"></div>
+      </div>
+
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="transcricaoArquivo()">▶️ Transcrever</button>
+      <button class="btn btn-ghost"   onclick="limparArquivos()">🗑️ Limpar</button>
+    </div>
+  </div>
+
+  <!-- TRANSCRIÇÃO -->
+  <div class="card painel" id="painel-trans">
+    <div class="card-title">📝 Transcrição</div>
+    <div class="loading" id="load-trans"><div class="spinner"></div> Transcrevendo...</div>
+    <textarea id="texto-trans" placeholder="A transcrição aparecerá aqui..."></textarea>
+    <div class="btn-row">
+      <button class="btn btn-ghost"   onclick="copiarTrans()">📋 Copiar</button>
+      <button class="btn btn-ghost"   onclick="baixarTxt('trans')">⬇️ Baixar TXT</button>
+      <button class="btn btn-ghost"   onclick="abrirEmail('trans')">📧 Enviar e-mail</button>
+      <button class="btn btn-primary" id="btn-resumo" onclick="gerarResumo()">✨ Resumo IA</button>
+    </div>
+  </div>
+
+  <!-- RESUMO -->
+  <div class="card painel" id="painel-resumo">
+    <div class="card-title">🤖 Resumo da Reunião</div>
+    <div class="loading" id="load-resumo"><div class="spinner"></div> Gerando resumo com IA...</div>
+    <div id="box-resumo"></div>
+    <div class="btn-row" id="btns-resumo" style="display:none">
+      <button class="btn btn-ghost" onclick="copiarResumo()">📋 Copiar</button>
+      <button class="btn btn-ghost" onclick="baixarTxt('resumo')">⬇️ Baixar TXT</button>
+      <button class="btn btn-green" onclick="abrirEmail('resumo')">📧 Enviar e-mail</button>
+    </div>
+  </div>
+
+</div><!-- fim .main -->
+
+<!-- MODAL EMAIL -->
+<div class="overlay" id="modal-email">
+  <div class="modal">
+    <button class="modal-fechar" onclick="fecharEmail()">✕</button>
+    <h2>📧 Enviar por e-mail</h2>
+    <div class="campo"><label>Para</label><input type="email" id="email-para" placeholder="destinatario@email.com"></div>
+    <div class="campo"><label>Assunto</label><input type="text" id="email-assunto"></div>
+    <div class="campo"><label>Mensagem</label><textarea id="email-corpo" rows="7"></textarea></div>
+    <div class="loading" id="load-email"><div class="spinner"></div> Enviando...</div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="fecharEmail()">Cancelar</button>
+      <button class="btn btn-green" onclick="enviarEmail()">📤 Enviar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── ABAS ─────────────────────────────────────────────────────────────────────
+function trocarAba(qual) {
+  // Botões
+  document.getElementById('tab-ao-vivo').className = 'tab' + (qual === 'ao-vivo' ? ' ativo' : '');
+  document.getElementById('tab-arquivo').className = 'tab' + (qual === 'arquivo'  ? ' ativo' : '');
+  // Painéis
+  document.getElementById('painel-ao-vivo').className = 'card painel' + (qual === 'ao-vivo' ? ' visivel' : '');
+  document.getElementById('painel-arquivo').className = 'card painel' + (qual === 'arquivo'  ? ' visivel' : '');
+}
+
+// ── STATUS ────────────────────────────────────────────────────────────────────
+function status(msg, cls) {
+  const b = document.getElementById('badge');
+  b.textContent = msg;
+  b.className = 'badge' + (cls ? ' ' + cls : '');
+}
+
+function setFonte(id, cls) {
+  document.getElementById(id).className = 'fonte' + (cls ? ' ' + cls : '');
+}
+
+// ── GRAVAÇÃO AO VIVO ─────────────────────────────────────────────────────────
+let gravando = false;
+let micStream, sysStream, micRec, sysRec;
+let micDados = [], sysDados = [];
+let timerInt, secs = 0;
+
+async function alternarGravacao() {
+  if (!gravando) await iniciarGravacao();
+  else pararGravacao();
+}
+
+async function iniciarGravacao() {
+  micDados = []; sysDados = [];
+
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch(e) {
+    alert('Microfone negado: ' + e.message); return;
+  }
+
+  micRec = new MediaRecorder(micStream);
+  micRec.ondataavailable = e => e.data.size && micDados.push(e.data);
+  micRec.start(200);
+  setFonte('fonte-mic', 'ligado');
+
+  sysRec = null; sysStream = null;
+  try {
+    sysStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { width: 1, height: 1 },
+      audio: { echoCancellation: false, noiseSuppression: false }
+    });
+    const tracks = sysStream.getAudioTracks();
+    if (tracks.length) {
+      sysRec = new MediaRecorder(new MediaStream(tracks));
+      sysRec.ondataavailable = e => e.data.size && sysDados.push(e.data);
+      sysRec.start(200);
+      setFonte('fonte-sys', 'ligado');
+    } else {
+      setFonte('fonte-sys', 'aviso');
+      sysStream.getTracks().forEach(t => t.stop());
+      sysStream = null;
+    }
+  } catch(e) {
+    setFonte('fonte-sys', 'aviso');
+    sysStream = null;
+  }
+
+  gravando = true; secs = 0;
+  const timer = document.getElementById('timer');
+  timer.style.display = 'block';
+  timerInt = setInterval(() => {
+    secs++;
+    timer.textContent = String(Math.floor(secs/60)).padStart(2,'0') + ':' + String(secs%60).padStart(2,'0');
+  }, 1000);
+
+  const btn = document.getElementById('btn-gravar');
+  btn.textContent = '⏹ PARAR';
+  btn.classList.add('parar');
+  status('🔴 gravando', 'busy');
+}
+
+function pararGravacao() {
+  gravando = false;
+  clearInterval(timerInt);
+  document.getElementById('timer').style.display = 'none';
+
+  const btn = document.getElementById('btn-gravar');
+  btn.disabled = true;
+  btn.classList.remove('parar');
+  btn.textContent = '⏺ GRAVAR';
+  setFonte('fonte-mic', '');
+  setFonte('fonte-sys', '');
+  status('⏳ processando...', 'busy');
+
+  const promessas = [new Promise(r => { micRec.onstop = r; micRec.stop(); })];
+  if (sysRec && sysRec.state !== 'inactive')
+    promessas.push(new Promise(r => { sysRec.onstop = r; sysRec.stop(); }));
+
+  micStream.getTracks().forEach(t => t.stop());
+  if (sysStream) sysStream.getTracks().forEach(t => t.stop());
+
+  Promise.all(promessas).then(() => {
+    const fd = new FormData();
+    fd.append('mic', new Blob(micDados, { type: 'audio/webm' }), 'mic.webm');
+    if (sysDados.length) fd.append('sys', new Blob(sysDados, { type: 'audio/webm' }), 'sys.webm');
+    enviarTranscricao(fd).then(() => { btn.disabled = false; });
+  });
+}
+
+// ── UPLOAD DE ARQUIVO ────────────────────────────────────────────────────────
+const arquivos = { mic: null, sys: null };
+
+function arquivoSelecionado(input, src) {
+  const f = input.files[0];
+  if (!f) return;
+  arquivos[src] = f;
+  document.getElementById('nome-' + src).textContent = '✅ ' + f.name;
+  document.getElementById('zona-' + src).classList.add('com-arquivo');
+}
+
+function arrastarSobre(e, id) {
+  e.preventDefault();
+  document.getElementById(id).style.borderColor = '#6366f1';
+}
+function arrastarSair(id) {
+  document.getElementById(id).style.borderColor = '';
+}
+function soltar(e, src) {
+  e.preventDefault();
+  arrastarSair('zona-' + src);
+  const f = e.dataTransfer.files[0];
+  if (f) {
+    arquivos[src] = f;
+    document.getElementById('nome-' + src).textContent = '✅ ' + f.name;
+    document.getElementById('zona-' + src).classList.add('com-arquivo');
+  }
+}
+
+function limparArquivos() {
+  ['mic','sys'].forEach(s => {
+    arquivos[s] = null;
+    document.getElementById('input-' + s).value = '';
+    document.getElementById('nome-' + s).textContent = '';
+    document.getElementById('zona-' + s).classList.remove('com-arquivo');
+    document.getElementById('zona-' + s).style.borderColor = '';
+  });
+}
+
+async function transcricaoArquivo() {
+  if (!arquivos.mic && !arquivos.sys) {
+    alert('Selecione ao menos um arquivo.'); return;
+  }
+  const fd = new FormData();
+  if (arquivos.mic) fd.append('mic', arquivos.mic, arquivos.mic.name);
+  if (arquivos.sys) fd.append('sys', arquivos.sys, arquivos.sys.name);
+  await enviarTranscricao(fd);
+}
+
+// ── TRANSCRIÇÃO ───────────────────────────────────────────────────────────────
+async function enviarTranscricao(fd) {
+  const pTrans = document.getElementById('painel-trans');
+  pTrans.classList.add('visivel');
+  document.getElementById('load-trans').classList.add('show');
+  document.getElementById('texto-trans').value = '';
+  document.getElementById('painel-resumo').classList.remove('visivel');
+
+  try {
+    const r = await fetch('/transcribe', { method: 'POST', body: fd });
+    const d = await r.json();
+    document.getElementById('load-trans').classList.remove('show');
+    document.getElementById('texto-trans').value = d.ok ? d.text : ('Erro: ' + d.error);
+    status(d.ok ? '✅ pronto' : '❌ erro', d.ok ? 'ok' : 'err');
+  } catch(e) {
+    document.getElementById('load-trans').classList.remove('show');
+    document.getElementById('texto-trans').value = 'Erro de conexão: ' + e.message;
+    status('❌ erro', 'err');
+  }
+}
+
+// ── RESUMO ────────────────────────────────────────────────────────────────────
+async function gerarResumo() {
+  const texto = document.getElementById('texto-trans').value.trim();
+  if (!texto) return;
+
+  const pResumo = document.getElementById('painel-resumo');
+  pResumo.classList.add('visivel');
+  document.getElementById('load-resumo').classList.add('show');
+  document.getElementById('box-resumo').style.display = 'none';
+  document.getElementById('btns-resumo').style.display = 'none';
+  document.getElementById('btn-resumo').disabled = true;
+  status('🤖 gerando resumo...', 'busy');
+
+  try {
+    const r = await fetch('/summarize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: texto })
+    });
+    const d = await r.json();
+    document.getElementById('load-resumo').classList.remove('show');
+    if (d.ok) {
+      const box = document.getElementById('box-resumo');
+      box.textContent = d.summary;
+      box.style.display = 'block';
+      document.getElementById('btns-resumo').style.display = 'flex';
+      status('✅ pronto', 'ok');
+    } else {
+      alert('Erro: ' + d.error);
+      status('❌ erro', 'err');
+    }
+  } catch(e) {
+    document.getElementById('load-resumo').classList.remove('show');
+    alert('Erro: ' + e.message);
+    status('❌ erro', 'err');
+  }
+
+  document.getElementById('btn-resumo').disabled = false;
+}
+
+// ── EMAIL ─────────────────────────────────────────────────────────────────────
+let emailTipo = 'trans';
+
+function abrirEmail(tipo) {
+  emailTipo = tipo;
+  const corpo = tipo === 'resumo'
+    ? document.getElementById('box-resumo').textContent
+    : document.getElementById('texto-trans').value;
+  document.getElementById('email-assunto').value = tipo === 'resumo' ? 'Resumo de Reunião' : 'Transcrição de Reunião';
+  document.getElementById('email-corpo').value = corpo;
+  document.getElementById('modal-email').classList.add('aberto');
+}
+
+function fecharEmail() {
+  document.getElementById('modal-email').classList.remove('aberto');
+}
+
+async function enviarEmail() {
+  const para = document.getElementById('email-para').value.trim();
+  if (!para) { alert('Informe o destinatário.'); return; }
+
+  document.getElementById('load-email').classList.add('show');
+  try {
+    const r = await fetch('/send-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        to: para,
+        subject: document.getElementById('email-assunto').value,
+        body: document.getElementById('email-corpo').value
+      })
+    });
+    const d = await r.json();
+    document.getElementById('load-email').classList.remove('show');
+    if (d.ok) { alert('✅ E-mail enviado!'); fecharEmail(); }
+    else alert('Erro: ' + d.error);
+  } catch(e) {
+    document.getElementById('load-email').classList.remove('show');
+    alert('Erro: ' + e.message);
+  }
+}
+
+// ── UTILITÁRIOS ───────────────────────────────────────────────────────────────
+function copiarTrans()  { navigator.clipboard.writeText(document.getElementById('texto-trans').value); }
+function copiarResumo() { navigator.clipboard.writeText(document.getElementById('box-resumo').textContent); }
+
+function baixarTxt(tipo) {
+  const conteudo = tipo === 'resumo'
+    ? document.getElementById('box-resumo').textContent
+    : document.getElementById('texto-trans').value;
+  const ts = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([conteudo], { type: 'text/plain' }));
+  a.download = tipo + '_' + ts + '.txt';
+  a.click();
+}
+</script>
+</body>
+</html>
