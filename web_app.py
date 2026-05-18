@@ -145,14 +145,14 @@ def gerar_resumo(transcricao: str, api_key: str) -> str:
     return resp.choices[0].message.content
 
 
-# ── Componente de captura de tela / guia ──────────────────────────────────────
+# ── Componente de captura: microfone + áudio do sistema (mesclados) ───────────
 _CAPTURE_HTML = f"""
 <div style="font-family:sans-serif;padding:4px 0;">
   <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
     <button id="btnStart" onclick="startCapture()"
       style="background:#6366f1;color:#fff;border:none;border-radius:8px;
              padding:7px 14px;font-weight:600;cursor:pointer;font-size:0.85rem;">
-      🖥 Compartilhar Tela / Guia
+      🎙🖥 Gravar Voz + Áudio do PC
     </button>
     <button id="btnStop" onclick="stopCapture()" disabled
       style="background:#444;color:#888;border:none;border-radius:8px;
@@ -162,44 +162,87 @@ _CAPTURE_HTML = f"""
   </div>
   <p id="cap-status"
     style="color:#a5b4fc;margin:6px 0 0;font-size:0.8rem;min-height:1.2em;">
-    Pronto. Clique em "Compartilhar" e escolha a guia ou a tela inteira.
+    Captura o microfone e o áudio do PC ao mesmo tempo.
   </p>
 </div>
 <script>
-var recorder=null, chunks=[], stream=null;
+var recorder=null, chunks=[], sources=null;
 
 async function startCapture(){{
   try{{
-    stream = await navigator.mediaDevices.getDisplayMedia({{
-      video: true,
-      audio: {{ echoCancellation:false, noiseSuppression:false, sampleRate:44100 }}
-    }});
-    // descarta trilhas de vídeo — só precisamos do áudio
-    stream.getVideoTracks().forEach(function(t){{ t.stop(); }});
-    var audioTracks = stream.getAudioTracks();
-    if(!audioTracks.length){{
-      setStatus('⚠️ Nenhum áudio detectado. Marque "Compartilhar áudio" na janela de seleção.','#fbbf24');
+    // 1. microfone
+    var micStream = null;
+    try{{
+      micStream = await navigator.mediaDevices.getUserMedia({{audio:true, video:false}});
+    }}catch(e){{
+      setStatus('⚠️ Microfone negado: ' + e.message, '#fbbf24');
+    }}
+
+    // 2. áudio do sistema via compartilhamento de tela
+    var displayStream = null;
+    try{{
+      displayStream = await navigator.mediaDevices.getDisplayMedia({{
+        video: true,
+        audio: {{echoCancellation:false, noiseSuppression:false, sampleRate:44100}}
+      }});
+      displayStream.getVideoTracks().forEach(function(t){{ t.stop(); }});
+    }}catch(e){{
+      setStatus('⚠️ Captura de tela cancelada: ' + e.message, '#fbbf24');
+    }}
+
+    if(!micStream && !displayStream){{
+      setStatus('Nenhuma fonte de áudio disponível.', '#f87171');
       return;
     }}
-    var audioStream = new MediaStream(audioTracks);
+
+    // 3. mescla os dois áudios via AudioContext
+    var audioCtx = new AudioContext();
+    var dest = audioCtx.createMediaStreamDestination();
+
+    if(micStream){{
+      audioCtx.createMediaStreamSource(micStream).connect(dest);
+    }}
+
+    var sysOk = false;
+    if(displayStream){{
+      var sysTracks = displayStream.getAudioTracks();
+      if(sysTracks.length){{
+        audioCtx.createMediaStreamSource(new MediaStream(sysTracks)).connect(dest);
+        sysOk = true;
+      }}else{{
+        setStatus('⚠️ Áudio do sistema não detectado — marque "Compartilhar áudio" na seleção.', '#fbbf24');
+      }}
+    }}
+
+    // 4. grava o stream mesclado
     var mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
                ? 'audio/webm;codecs=opus' : 'audio/webm';
-    recorder = new MediaRecorder(audioStream, {{mimeType: mime}});
+    recorder = new MediaRecorder(dest.stream, {{mimeType: mime}});
     chunks = [];
     recorder.ondataavailable = function(e){{ if(e.data.size) chunks.push(e.data); }};
     recorder.onstop = sendAudio;
     recorder.start(1000);
+
+    sources = {{mic: micStream, display: displayStream, ctx: audioCtx}};
     btnState(true);
-    setStatus('🔴 Gravando... clique em Parar quando terminar.','#f87171');
+
+    var label = [micStream ? 'microfone' : null, sysOk ? 'áudio do PC' : null]
+                  .filter(Boolean).join(' + ');
+    setStatus('🔴 Gravando: ' + label + '. Clique em Parar quando terminar.', '#f87171');
+
   }}catch(e){{
-    setStatus('Erro: ' + e.message,'#f87171');
+    setStatus('Erro: ' + e.message, '#f87171');
   }}
 }}
 
 function stopCapture(){{
   if(recorder && recorder.state !== 'inactive') recorder.stop();
-  if(stream) stream.getTracks().forEach(function(t){{ t.stop(); }});
-  setStatus('Enviando áudio...','#a5b4fc');
+  if(sources){{
+    if(sources.mic) sources.mic.getTracks().forEach(function(t){{ t.stop(); }});
+    if(sources.display) sources.display.getTracks().forEach(function(t){{ t.stop(); }});
+    if(sources.ctx) sources.ctx.close();
+  }}
+  setStatus('Enviando áudio...', '#a5b4fc');
 }}
 
 async function sendAudio(){{
@@ -211,12 +254,12 @@ async function sendAudio(){{
       body: blob
     }});
     if(r.ok){{
-      setStatus('✅ Áudio capturado! Pressione "▶ Transcrever" abaixo.','#4ade80');
+      setStatus('✅ Áudio capturado! Pressione "▶ Transcrever" abaixo.', '#4ade80');
     }}else{{
-      setStatus('Erro no servidor local: ' + r.status,'#f87171');
+      setStatus('Erro no servidor local: ' + r.status, '#f87171');
     }}
   }}catch(e){{
-    setStatus('Falha ao enviar áudio: ' + e.message,'#f87171');
+    setStatus('Falha ao enviar: ' + e.message, '#f87171');
   }}
   btnState(false);
 }}
@@ -234,7 +277,7 @@ function btnState(recording){{
 function setStatus(msg, color){{
   var el = document.getElementById('cap-status');
   el.textContent = msg;
-  el.style.color  = color || '#a5b4fc';
+  el.style.color = color || '#a5b4fc';
 }}
 </script>
 """
@@ -263,12 +306,12 @@ with st.sidebar:
 # Carrega modelo
 model = load_model(modelo)
 
-# ── Captura de tela (largura total) ──────────────────────────────────────────
-st.subheader("🖥 Capturar Tela / Guia do Navegador")
+# ── Captura de voz + áudio do PC (largura total) ─────────────────────────────
+st.subheader("🎙🖥 Gravar Voz + Áudio do PC")
 components.html(_CAPTURE_HTML, height=90)
 if _cap_buf.get("bytes"):
-    st.success("Áudio da tela capturado e pronto.", icon="✅")
-st.caption("No Chrome, marque 'Compartilhar áudio da guia' na janela de seleção.")
+    st.success("Áudio capturado e pronto para transcrição.", icon="✅")
+st.caption("Ao compartilhar, selecione 'Tela inteira' e marque **Compartilhar áudio do sistema** no Chrome.")
 
 st.divider()
 
