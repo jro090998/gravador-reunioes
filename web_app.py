@@ -1,8 +1,11 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import tempfile
 import os
 from pathlib import Path
 from datetime import datetime
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -43,6 +46,44 @@ textarea { background: #222 !important; color: #f1f5f9 !important; }
 """, unsafe_allow_html=True)
 
 
+# ── Mini servidor HTTP para receber áudio capturado pelo browser ──────────────
+CAPTURE_PORT = 8765
+_cap_buf: dict = {}   # buffer módulo-nível; app local single-user
+
+
+class _Handler(BaseHTTPRequestHandler):
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self._cors()
+        self.end_headers()
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", 0))
+        _cap_buf["bytes"] = self.rfile.read(n)
+        self.send_response(200)
+        self._cors()
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"ok":true}')
+
+    def _cors(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+    def log_message(self, *_):
+        pass
+
+
+if not st.session_state.get("_cap_srv_started"):
+    try:
+        _srv = HTTPServer(("127.0.0.1", CAPTURE_PORT), _Handler)
+        threading.Thread(target=_srv.serve_forever, daemon=True).start()
+    except OSError:
+        pass  # porta já em uso — servidor já rodando
+    st.session_state["_cap_srv_started"] = True
+
+
 # ── Model cache ───────────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner="Carregando modelo Whisper...")
 def load_model(name: str):
@@ -51,8 +92,8 @@ def load_model(name: str):
 
 
 # ── Transcription ─────────────────────────────────────────────────────────────
-def transcrever(audio_bytes: bytes, label: str, model) -> list[dict]:
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+def transcrever(audio_bytes: bytes, label: str, model, suffix=".wav") -> list[dict]:
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
         f.write(audio_bytes)
         tmp = f.name
     try:
@@ -104,6 +145,101 @@ def gerar_resumo(transcricao: str, api_key: str) -> str:
     return resp.choices[0].message.content
 
 
+# ── Componente de captura de tela / guia ──────────────────────────────────────
+_CAPTURE_HTML = f"""
+<div style="font-family:sans-serif;padding:4px 0;">
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+    <button id="btnStart" onclick="startCapture()"
+      style="background:#6366f1;color:#fff;border:none;border-radius:8px;
+             padding:7px 14px;font-weight:600;cursor:pointer;font-size:0.85rem;">
+      🖥 Compartilhar Tela / Guia
+    </button>
+    <button id="btnStop" onclick="stopCapture()" disabled
+      style="background:#444;color:#888;border:none;border-radius:8px;
+             padding:7px 14px;font-weight:600;cursor:not-allowed;font-size:0.85rem;">
+      ⏹ Parar Gravação
+    </button>
+  </div>
+  <p id="cap-status"
+    style="color:#a5b4fc;margin:6px 0 0;font-size:0.8rem;min-height:1.2em;">
+    Pronto. Clique em "Compartilhar" e escolha a guia ou a tela inteira.
+  </p>
+</div>
+<script>
+var recorder=null, chunks=[], stream=null;
+
+async function startCapture(){{
+  try{{
+    stream = await navigator.mediaDevices.getDisplayMedia({{
+      video: true,
+      audio: {{ echoCancellation:false, noiseSuppression:false, sampleRate:44100 }}
+    }});
+    // descarta trilhas de vídeo — só precisamos do áudio
+    stream.getVideoTracks().forEach(function(t){{ t.stop(); }});
+    var audioTracks = stream.getAudioTracks();
+    if(!audioTracks.length){{
+      setStatus('⚠️ Nenhum áudio detectado. Marque "Compartilhar áudio" na janela de seleção.','#fbbf24');
+      return;
+    }}
+    var audioStream = new MediaStream(audioTracks);
+    var mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+               ? 'audio/webm;codecs=opus' : 'audio/webm';
+    recorder = new MediaRecorder(audioStream, {{mimeType: mime}});
+    chunks = [];
+    recorder.ondataavailable = function(e){{ if(e.data.size) chunks.push(e.data); }};
+    recorder.onstop = sendAudio;
+    recorder.start(1000);
+    btnState(true);
+    setStatus('🔴 Gravando... clique em Parar quando terminar.','#f87171');
+  }}catch(e){{
+    setStatus('Erro: ' + e.message,'#f87171');
+  }}
+}}
+
+function stopCapture(){{
+  if(recorder && recorder.state !== 'inactive') recorder.stop();
+  if(stream) stream.getTracks().forEach(function(t){{ t.stop(); }});
+  setStatus('Enviando áudio...','#a5b4fc');
+}}
+
+async function sendAudio(){{
+  var blob = new Blob(chunks, {{type:'audio/webm'}});
+  try{{
+    var r = await fetch('http://127.0.0.1:{CAPTURE_PORT}', {{
+      method: 'POST',
+      headers: {{'Content-Type':'audio/webm'}},
+      body: blob
+    }});
+    if(r.ok){{
+      setStatus('✅ Áudio capturado! Pressione "▶ Transcrever" abaixo.','#4ade80');
+    }}else{{
+      setStatus('Erro no servidor local: ' + r.status,'#f87171');
+    }}
+  }}catch(e){{
+    setStatus('Falha ao enviar áudio: ' + e.message,'#f87171');
+  }}
+  btnState(false);
+}}
+
+function btnState(recording){{
+  var s = document.getElementById('btnStart');
+  var p = document.getElementById('btnStop');
+  s.disabled = recording;
+  p.disabled = !recording;
+  p.style.background = recording ? '#ef4444' : '#444';
+  p.style.color      = recording ? '#fff'    : '#888';
+  p.style.cursor     = recording ? 'pointer' : 'not-allowed';
+}}
+
+function setStatus(msg, color){{
+  var el = document.getElementById('cap-status');
+  el.textContent = msg;
+  el.style.color  = color || '#a5b4fc';
+}}
+</script>
+"""
+
+
 # ── UI ────────────────────────────────────────────────────────────────────────
 st.title("🎙 Gravador de Reuniões")
 st.caption("Transcrição automática + resumo com IA")
@@ -133,14 +269,18 @@ col1, col2 = st.columns(2)
 with col1:
     st.subheader("🎤 Microfone")
     mic_audio = st.audio_input("Gravar pelo microfone")
-    mic_file  = st.file_uploader("ou enviar arquivo", type=["wav","mp3","mp4","m4a","ogg"],
+    mic_file  = st.file_uploader("ou enviar arquivo", type=["wav","mp3","mp4","m4a","ogg","webm"],
                                   key="mic_file")
 
 with col2:
-    st.subheader("🔊 Navegador / Sistema")
-    sys_file = st.file_uploader("Enviar gravação do sistema", type=["wav","mp3","mp4","m4a","ogg"],
+    st.subheader("🖥 Tela / Guia do Navegador")
+    components.html(_CAPTURE_HTML, height=90)
+    if _cap_buf.get("bytes"):
+        st.success("Áudio da tela capturado e pronto.", icon="✅")
+    sys_file = st.file_uploader("ou enviar arquivo de áudio",
+                                 type=["wav","mp3","mp4","m4a","ogg","webm"],
                                  key="sys_file")
-    st.caption("Grave o áudio do sistema separadamente e envie aqui.")
+    st.caption("Na janela do Chrome, marque 'Compartilhar áudio da guia'.")
 
 st.divider()
 
@@ -154,7 +294,11 @@ if st.button("▶ Transcrever", use_container_width=True):
     elif mic_file:
         mic_bytes = mic_file.read()
 
-    sys_bytes = sys_file.read() if sys_file else None
+    sys_bytes = None
+    if _cap_buf.get("bytes"):
+        sys_bytes = _cap_buf["bytes"]
+    elif sys_file:
+        sys_bytes = sys_file.read()
 
     if not mic_bytes and not sys_bytes:
         st.warning("Forneça ao menos um áudio para transcrever.")
@@ -163,11 +307,12 @@ if st.button("▶ Transcrever", use_container_width=True):
             if mic_bytes:
                 segments += transcrever(mic_bytes, "Microfone", model)
             if sys_bytes:
-                segments += transcrever(sys_bytes, "Navegador", model)
+                segments += transcrever(sys_bytes, "Tela/Sistema", model, suffix=".webm")
 
         texto = formatar(segments)
         st.session_state["transcricao"] = texto
         st.session_state["resumo"] = ""
+        _cap_buf.clear()
 
 # Exibe transcrição
 if "transcricao" in st.session_state and st.session_state["transcricao"]:
