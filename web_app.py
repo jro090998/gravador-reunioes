@@ -1,8 +1,6 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import tempfile
 import os
-from pathlib import Path
 from datetime import datetime
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -46,25 +44,166 @@ textarea { background: #222 !important; color: #f1f5f9 !important; }
 """, unsafe_allow_html=True)
 
 
-# ── Mini servidor HTTP para receber áudio capturado pelo browser ──────────────
+# ── Página de gravação servida pelo servidor local ────────────────────────────
+_RECORDER_PAGE = """\
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Gravador de Reunião</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#0e0e0e;color:#f1f5f9;font-family:'Segoe UI',sans-serif;
+         min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem}
+    .card{background:#181818;border-radius:16px;padding:2rem;max-width:480px;width:100%;
+          box-shadow:0 8px 32px #0006;display:flex;flex-direction:column;gap:1.25rem}
+    h1{font-size:1.4rem;font-weight:700;color:#f1f5f9}
+    .subtitle{font-size:0.85rem;color:#94a3b8}
+    .btns{display:flex;gap:10px;flex-wrap:wrap}
+    button{border:none;border-radius:10px;padding:11px 20px;font-size:0.9rem;
+           font-weight:600;cursor:pointer;transition:background .15s}
+    #btnStart{background:#6366f1;color:#fff}
+    #btnStart:hover:not(:disabled){background:#4f46e5}
+    #btnStop{background:#333;color:#666;cursor:not-allowed}
+    #btnStop.active{background:#ef4444;color:#fff;cursor:pointer}
+    #btnStop.active:hover{background:#dc2626}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    .status{font-size:0.85rem;padding:10px 14px;border-radius:8px;
+            background:#111;border-left:3px solid #6366f1;color:#a5b4fc;min-height:42px}
+    .status.ok{border-color:#22c55e;color:#4ade80}
+    .status.err{border-color:#ef4444;color:#f87171}
+    .status.rec{border-color:#ef4444;color:#f87171}
+    .status.warn{border-color:#f59e0b;color:#fbbf24}
+    .hint{font-size:0.78rem;color:#64748b;line-height:1.5}
+    .hint b{color:#94a3b8}
+  </style>
+</head>
+<body>
+<div class="card">
+  <div>
+    <h1>🎙🖥 Gravador de Reunião</h1>
+    <p class="subtitle">Captura microfone + áudio do PC simultaneamente</p>
+  </div>
+  <div class="btns">
+    <button id="btnStart" onclick="startRec()">▶ Iniciar Gravação</button>
+    <button id="btnStop" onclick="stopRec()">⏹ Parar</button>
+  </div>
+  <div id="status" class="status">Pronto. Clique em Iniciar para começar.</div>
+  <p class="hint">
+    Na janela de compartilhamento:<br>
+    • Guia → selecione a guia e marque <b>"Compartilhar áudio da guia"</b><br>
+    • PC inteiro → selecione <b>"Tela inteira"</b> e marque <b>"Compartilhar áudio do sistema"</b>
+  </p>
+</div>
+<script>
+var recorder, chunks=[], sources;
+
+async function startRec(){
+  setStatus('Aguardando permissões...','');
+  try{
+    var mic=null;
+    try{ mic=await navigator.mediaDevices.getUserMedia({audio:true,video:false}); }
+    catch(e){ setStatus('Microfone negado: '+e.message,'err'); }
+
+    var disp=null;
+    try{
+      disp=await navigator.mediaDevices.getDisplayMedia({
+        video:true, audio:{echoCancellation:false,noiseSuppression:false,sampleRate:44100}
+      });
+      disp.getVideoTracks().forEach(t=>t.stop());
+    }catch(e){ setStatus('Compartilhamento cancelado: '+e.message,'warn'); }
+
+    if(!mic && !disp){ setStatus('Nenhuma fonte de áudio.','err'); return; }
+
+    var ctx=new AudioContext(), dest=ctx.createMediaStreamDestination();
+    if(mic) ctx.createMediaStreamSource(mic).connect(dest);
+    var sysOk=false;
+    if(disp){
+      var st=disp.getAudioTracks();
+      if(st.length){ ctx.createMediaStreamSource(new MediaStream(st)).connect(dest); sysOk=true; }
+      else setStatus('Áudio do sistema não detectado — marque "Compartilhar áudio" na seleção.','warn');
+    }
+
+    var mime=MediaRecorder.isTypeSupported('audio/webm;codecs=opus')?'audio/webm;codecs=opus':'audio/webm';
+    recorder=new MediaRecorder(dest.stream,{mimeType:mime});
+    chunks=[];
+    recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
+    recorder.onstop=send;
+    recorder.start(1000);
+    sources={mic,disp,ctx};
+
+    document.getElementById('btnStart').disabled=true;
+    var stop=document.getElementById('btnStop');
+    stop.classList.add('active');
+
+    var label=[mic?'microfone':null,sysOk?'áudio do PC':null].filter(Boolean).join(' + ');
+    setStatus('🔴 Gravando: '+label,'rec');
+  }catch(e){ setStatus('Erro: '+e.message,'err'); }
+}
+
+function stopRec(){
+  if(recorder&&recorder.state!=='inactive') recorder.stop();
+  if(sources){
+    if(sources.mic) sources.mic.getTracks().forEach(t=>t.stop());
+    if(sources.disp) sources.disp.getTracks().forEach(t=>t.stop());
+    if(sources.ctx) sources.ctx.close();
+  }
+  document.getElementById('btnStop').classList.remove('active');
+  setStatus('Enviando áudio para o Streamlit...','');
+}
+
+async function send(){
+  var blob=new Blob(chunks,{type:'audio/webm'});
+  try{
+    var r=await fetch('/audio',{method:'POST',headers:{'Content-Type':'audio/webm'},body:blob});
+    if(r.ok){
+      setStatus('✅ Gravação enviada! Volte ao Streamlit e clique em ▶ Transcrever.','ok');
+      document.getElementById('btnStart').disabled=false;
+    } else setStatus('Erro no servidor: '+r.status,'err');
+  }catch(e){ setStatus('Falha ao enviar: '+e.message,'err'); }
+}
+
+function setStatus(msg,cls){
+  var el=document.getElementById('status');
+  el.textContent=msg;
+  el.className='status'+(cls?' '+cls:'');
+}
+</script>
+</body>
+</html>"""
+
+# ── Servidor HTTP local ───────────────────────────────────────────────────────
 CAPTURE_PORT = 8765
-_cap_buf: dict = {}   # buffer módulo-nível; app local single-user
+_cap_buf: dict = {}
 
 
 class _Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = _RECORDER_PAGE.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_OPTIONS(self):
         self.send_response(200)
         self._cors()
         self.end_headers()
 
     def do_POST(self):
-        n = int(self.headers.get("Content-Length", 0))
-        _cap_buf["bytes"] = self.rfile.read(n)
-        self.send_response(200)
-        self._cors()
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(b'{"ok":true}')
+        if self.path == "/audio":
+            n = int(self.headers.get("Content-Length", 0))
+            _cap_buf["bytes"] = self.rfile.read(n)
+            self.send_response(200)
+            self._cors()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+        else:
+            self.send_response(404)
+            self.end_headers()
 
     def _cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -80,7 +219,7 @@ if not st.session_state.get("_cap_srv_started"):
         _srv = HTTPServer(("127.0.0.1", CAPTURE_PORT), _Handler)
         threading.Thread(target=_srv.serve_forever, daemon=True).start()
     except OSError:
-        pass  # porta já em uso — servidor já rodando
+        pass  # porta já em uso
     st.session_state["_cap_srv_started"] = True
 
 
@@ -145,144 +284,6 @@ def gerar_resumo(transcricao: str, api_key: str) -> str:
     return resp.choices[0].message.content
 
 
-# ── Componente de captura: microfone + áudio do sistema (mesclados) ───────────
-_CAPTURE_HTML = f"""
-<div style="font-family:sans-serif;padding:4px 0;">
-  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-    <button id="btnStart" onclick="startCapture()"
-      style="background:#6366f1;color:#fff;border:none;border-radius:8px;
-             padding:7px 14px;font-weight:600;cursor:pointer;font-size:0.85rem;">
-      🎙🖥 Gravar Voz + Áudio do PC
-    </button>
-    <button id="btnStop" onclick="stopCapture()" disabled
-      style="background:#444;color:#888;border:none;border-radius:8px;
-             padding:7px 14px;font-weight:600;cursor:not-allowed;font-size:0.85rem;">
-      ⏹ Parar Gravação
-    </button>
-  </div>
-  <p id="cap-status"
-    style="color:#a5b4fc;margin:6px 0 0;font-size:0.8rem;min-height:1.2em;">
-    Captura o microfone e o áudio do PC ao mesmo tempo.
-  </p>
-</div>
-<script>
-var recorder=null, chunks=[], sources=null;
-
-async function startCapture(){{
-  try{{
-    // 1. microfone
-    var micStream = null;
-    try{{
-      micStream = await navigator.mediaDevices.getUserMedia({{audio:true, video:false}});
-    }}catch(e){{
-      setStatus('⚠️ Microfone negado: ' + e.message, '#fbbf24');
-    }}
-
-    // 2. áudio do sistema via compartilhamento de tela
-    var displayStream = null;
-    try{{
-      displayStream = await navigator.mediaDevices.getDisplayMedia({{
-        video: true,
-        audio: {{echoCancellation:false, noiseSuppression:false, sampleRate:44100}}
-      }});
-      displayStream.getVideoTracks().forEach(function(t){{ t.stop(); }});
-    }}catch(e){{
-      setStatus('⚠️ Captura de tela cancelada: ' + e.message, '#fbbf24');
-    }}
-
-    if(!micStream && !displayStream){{
-      setStatus('Nenhuma fonte de áudio disponível.', '#f87171');
-      return;
-    }}
-
-    // 3. mescla os dois áudios via AudioContext
-    var audioCtx = new AudioContext();
-    var dest = audioCtx.createMediaStreamDestination();
-
-    if(micStream){{
-      audioCtx.createMediaStreamSource(micStream).connect(dest);
-    }}
-
-    var sysOk = false;
-    if(displayStream){{
-      var sysTracks = displayStream.getAudioTracks();
-      if(sysTracks.length){{
-        audioCtx.createMediaStreamSource(new MediaStream(sysTracks)).connect(dest);
-        sysOk = true;
-      }}else{{
-        setStatus('⚠️ Áudio do sistema não detectado — marque "Compartilhar áudio" na seleção.', '#fbbf24');
-      }}
-    }}
-
-    // 4. grava o stream mesclado
-    var mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-               ? 'audio/webm;codecs=opus' : 'audio/webm';
-    recorder = new MediaRecorder(dest.stream, {{mimeType: mime}});
-    chunks = [];
-    recorder.ondataavailable = function(e){{ if(e.data.size) chunks.push(e.data); }};
-    recorder.onstop = sendAudio;
-    recorder.start(1000);
-
-    sources = {{mic: micStream, display: displayStream, ctx: audioCtx}};
-    btnState(true);
-
-    var label = [micStream ? 'microfone' : null, sysOk ? 'áudio do PC' : null]
-                  .filter(Boolean).join(' + ');
-    setStatus('🔴 Gravando: ' + label + '. Clique em Parar quando terminar.', '#f87171');
-
-  }}catch(e){{
-    setStatus('Erro: ' + e.message, '#f87171');
-  }}
-}}
-
-function stopCapture(){{
-  if(recorder && recorder.state !== 'inactive') recorder.stop();
-  if(sources){{
-    if(sources.mic) sources.mic.getTracks().forEach(function(t){{ t.stop(); }});
-    if(sources.display) sources.display.getTracks().forEach(function(t){{ t.stop(); }});
-    if(sources.ctx) sources.ctx.close();
-  }}
-  setStatus('Enviando áudio...', '#a5b4fc');
-}}
-
-async function sendAudio(){{
-  var blob = new Blob(chunks, {{type:'audio/webm'}});
-  try{{
-    var r = await fetch('http://127.0.0.1:{CAPTURE_PORT}', {{
-      method: 'POST',
-      headers: {{'Content-Type':'audio/webm'}},
-      body: blob
-    }});
-    if(r.ok){{
-      setStatus('✅ Áudio capturado! Pressione "▶ Transcrever" abaixo.', '#4ade80');
-    }}else{{
-      setStatus('Erro no servidor local: ' + r.status, '#f87171');
-    }}
-  }}catch(e){{
-    setStatus('Falha ao enviar: ' + e.message, '#f87171');
-  }}
-  btnState(false);
-}}
-
-function btnState(recording){{
-  var s = document.getElementById('btnStart');
-  var p = document.getElementById('btnStop');
-  s.disabled = recording;
-  p.disabled = !recording;
-  p.style.background = recording ? '#ef4444' : '#444';
-  p.style.color      = recording ? '#fff'    : '#888';
-  p.style.cursor     = recording ? 'pointer' : 'not-allowed';
-}}
-
-function setStatus(msg, color){{
-  var el = document.getElementById('cap-status');
-  el.textContent = msg;
-  el.style.color = color || '#a5b4fc';
-}}
-</script>
-"""
-
-
 # ── UI ────────────────────────────────────────────────────────────────────────
 st.title("🎙 Gravador de Reuniões")
 st.caption("Transcrição automática + resumo com IA")
@@ -306,12 +307,22 @@ with st.sidebar:
 # Carrega modelo
 model = load_model(modelo)
 
-# ── Captura de voz + áudio do PC (largura total) ─────────────────────────────
+# ── Captura de voz + áudio do PC ─────────────────────────────────────────────
 st.subheader("🎙🖥 Gravar Voz + Áudio do PC")
-components.html(_CAPTURE_HTML, height=90)
+
 if _cap_buf.get("bytes"):
-    st.success("Áudio capturado e pronto para transcrição.", icon="✅")
-st.caption("Ao compartilhar, selecione 'Tela inteira' e marque **Compartilhar áudio do sistema** no Chrome.")
+    st.success("Gravação recebida e pronta para transcrição.", icon="✅")
+    if st.button("🗑 Limpar gravação", key="clear_cap"):
+        _cap_buf.clear()
+        st.rerun()
+else:
+    st.link_button(
+        "▶ Abrir Gravador (nova aba)",
+        url=f"http://localhost:{CAPTURE_PORT}",
+        use_container_width=True,
+    )
+    st.caption("Abre uma página dedicada onde mic + áudio do PC funcionam corretamente. "
+               "Após gravar, volte aqui e clique em **▶ Transcrever**.")
 
 st.divider()
 
@@ -326,9 +337,10 @@ with col1:
 
 with col2:
     st.subheader("🔊 Áudio do Sistema")
-    sys_file = st.file_uploader("Enviar gravação do sistema", type=["wav","mp3","mp4","m4a","ogg","webm"],
+    sys_file = st.file_uploader("Enviar gravação do sistema",
+                                 type=["wav","mp3","mp4","m4a","ogg","webm"],
                                  key="sys_file")
-    st.caption("Alternativa ao botão acima: envie um arquivo de áudio gravado separadamente.")
+    st.caption("Alternativa: envie um arquivo de áudio gravado separadamente.")
 
 st.divider()
 
@@ -355,7 +367,7 @@ if st.button("▶ Transcrever", use_container_width=True):
             if mic_bytes:
                 segments += transcrever(mic_bytes, "Microfone", model)
             if sys_bytes:
-                segments += transcrever(sys_bytes, "Tela/Sistema", model, suffix=".webm")
+                segments += transcrever(sys_bytes, "Gravação", model, suffix=".webm")
 
         texto = formatar(segments)
         st.session_state["transcricao"] = texto
