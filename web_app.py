@@ -263,7 +263,16 @@ with st.sidebar:
 # Carrega modelo
 model = load_model(modelo)
 
-# Entrada de áudio
+# ── Captura de tela (largura total) ──────────────────────────────────────────
+st.subheader("🖥 Capturar Tela / Guia do Navegador")
+components.html(_CAPTURE_HTML, height=90)
+if _cap_buf.get("bytes"):
+    st.success("Áudio da tela capturado e pronto.", icon="✅")
+st.caption("No Chrome, marque 'Compartilhar áudio da guia' na janela de seleção.")
+
+st.divider()
+
+# ── Entrada de áudio por arquivo ──────────────────────────────────────────────
 col1, col2 = st.columns(2)
 
 with col1:
@@ -273,14 +282,10 @@ with col1:
                                   key="mic_file")
 
 with col2:
-    st.subheader("🖥 Tela / Guia do Navegador")
-    components.html(_CAPTURE_HTML, height=90)
-    if _cap_buf.get("bytes"):
-        st.success("Áudio da tela capturado e pronto.", icon="✅")
-    sys_file = st.file_uploader("ou enviar arquivo de áudio",
-                                 type=["wav","mp3","mp4","m4a","ogg","webm"],
+    st.subheader("🔊 Áudio do Sistema")
+    sys_file = st.file_uploader("Enviar gravação do sistema", type=["wav","mp3","mp4","m4a","ogg","webm"],
                                  key="sys_file")
-    st.caption("Na janela do Chrome, marque 'Compartilhar áudio da guia'.")
+    st.caption("Alternativa ao botão acima: envie um arquivo de áudio gravado separadamente.")
 
 st.divider()
 
